@@ -1,5 +1,6 @@
 import pygame
 import os
+import random
 
 pygame.init()
 
@@ -25,17 +26,38 @@ shoot = False
 grenade = False
 grenade_thrown = False
 
+grenade_scale = 2
+
 # load images
 # bullet
 bullet_img = pygame.image.load('img/Extra/bullet.png').convert_alpha()
 #grenade
 grenade_img = pygame.image.load('img/Extra/grenade.png').convert_alpha()
 
+grenade_img = pygame.transform.scale(grenade_img, (int(grenade_img.get_width() * grenade_scale), int(grenade_img.get_height() * grenade_scale)))
+# pickups
+health_box_img = pygame.image.load('img/Extra/health_box.png').convert_alpha()
+ammo_box_img = pygame.image.load('img/Extra/ammo_box.png').convert_alpha()
+grenade_box_img = pygame.image.load('img/Extra/grenade_box.png').convert_alpha()
+item_boxes = {
+    'health'        : health_box_img,
+    'ammo'          : ammo_box_img,
+    'grenade'       : grenade_box_img
+}
+
 
 # define colours
 BG = (144, 201, 120)
 RED = (255, 0, 0)
+WHITE = (255,255,255)
+GREEN = (0, 255, 0)
+BLACK = (0,0,0)
+# text font
+font = pygame.font.SysFont('Futura', 30)
 
+def draw_text(text, font, txt_col, x, y):
+    img = font.render(text, True, txt_col)
+    screen.blit(img, (x,y))
 
 def draw_bg():
     screen.fill(BG)
@@ -63,6 +85,11 @@ class Soldier(pygame.sprite.Sprite):
         self.frame_index = 0
         self.action = 0
         self.update_time = pygame.time.get_ticks()
+        # ai specifics
+        self.move_counter = 0
+        self.idling = False
+        self.idling_counter = 0
+        self.vision = pygame.Rect(0,0, 150, 20)
 
         # load all images for the players
         animation_types = ['Idle', 'Run', 'Jump', 'Death']
@@ -117,8 +144,8 @@ class Soldier(pygame.sprite.Sprite):
         dy += self.vel_y
 
         # check collision with floor
-        if self.rect.bottom + dy > 325:
-            dy = 325 - self.rect.bottom
+        if self.rect.bottom + dy > 300:
+            dy = 300 - self.rect.bottom
             self.in_air = False
 
         # update rectangle position
@@ -128,13 +155,52 @@ class Soldier(pygame.sprite.Sprite):
     def shoot(self):
         if self.shoot_cooldown == 0 and self.ammo > 0:
             self.shoot_cooldown = 20
-            bullet = Bullet(self.rect.centerx + (0.6 * self.rect.size[0] * self.direction), self.rect.centery,
+            bullet = Bullet(self.rect.centerx + (0.85 * self.rect.size[0] * self.direction), self.rect.centery,
                             self.direction)
             if self.direction != 1:
                 bullet.image = pygame.transform.flip(bullet.image, True, False)
             bullet_group.add(bullet)
             # reduce ammo
             self.ammo -= 1
+
+    def ai(self):
+        if self.alive and player.alive:
+            if self.idling == False and random.randint(1, 200) == 1:
+                self.idling = True
+                self.idling_counter = 50
+                self.update_action(0) # idle
+
+            #check for player near ai
+            if self.vision.colliderect(player.rect):
+                #stop running and face the player
+                self.update_action(0)
+                #and then shoot the player
+                self.shoot()
+
+            else:
+                if self.idling == False:
+                    if self.direction == 1:
+                        ai_moving_right = True
+                    else:
+                        ai_moving_right = False
+
+                    ai_moving_left = not ai_moving_right
+                    self.move(ai_moving_left, ai_moving_right)
+                    self.update_action(1) # run
+                    self.move_counter += 1
+                    #update ai vision
+                    self.vision.center = (self.rect.centerx + 75 * self.direction, self.rect.centery)
+                    #pygame.draw.rect(screen, RED, self.vision) #ENEMY VISION
+
+                    if self.move_counter > TILE_SIZE:
+                        self.direction *= -1
+                        self.move_counter *= -1
+                else:
+                    self.idling_counter -= 1
+                    if self.idling_counter <= 0:
+                        self.idling = False
+
+
 
     def update_animation(self):
         # update animation
@@ -171,6 +237,28 @@ class Soldier(pygame.sprite.Sprite):
         screen.blit(pygame.transform.flip(self.image, self.flip, False), self.rect)
 
 
+class ItemBox(pygame.sprite.Sprite):
+    def __init__(self, item_type, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        self.item_type = item_type
+        self.image = item_boxes[self.item_type]
+        self.rect  = self.image.get_rect()
+        self.rect.midtop = (x + TILE_SIZE // 2, y + (TILE_SIZE - self.image.get_height()))
+
+    def update(self):
+        # check if player has walked over box
+        if pygame.sprite.collide_rect(self, player):
+            if self.item_type == 'health':
+                player.health += 25
+                if player.health > player.max_health:
+                    player.health = player.max_health
+            elif self.item_type == 'ammo':
+                player.ammo += 15
+            elif self.item_type == 'grenade':
+                player.grenades += 3
+            # delete item box
+            self.kill()
+
 class Bullet(pygame.sprite.Sprite):
     def __init__(self, x, y, direction):
         pygame.sprite.Sprite.__init__(self)
@@ -197,6 +285,23 @@ class Bullet(pygame.sprite.Sprite):
                 if enemy.alive:
                     enemy.health -= 25
                     self.kill()
+
+
+class Healthbar():
+    def __init__(self, x, y, health, max_health):
+        self.x = x
+        self.y = y
+        self.health = health
+        self.max_health = max_health
+
+    def draw(self, health):
+        #update with new health
+        self.health = health
+        ratio = self.health / self.max_health
+        pygame.draw.rect(screen, BLACK, (self.x -2, self.y -2, 154, 24))
+        pygame.draw.rect(screen, RED, (self.x, self.y, 150, 20))
+        pygame.draw.rect(screen, GREEN, (self.x, self.y, 150 * ratio, 20))
+
 
 class Grenade(pygame.sprite.Sprite):
     def __init__(self, x, y, direction):
@@ -238,7 +343,7 @@ class Grenade(pygame.sprite.Sprite):
             for enemy in enemy_group:
                 if abs(self.rect.centerx - enemy.rect.centerx) < TILE_SIZE * 3 and \
                         abs(self.rect.centery - enemy.rect.centery) < TILE_SIZE * 3:
-                    enemy.health -= 75
+                    enemy.health -= 100
 
 
 
@@ -278,10 +383,26 @@ bullet_group = pygame.sprite.Group()
 grenade_group = pygame.sprite.Group()
 explosion_group = pygame.sprite.Group()
 enemy_group = pygame.sprite.Group()
+item_box_group = pygame.sprite.Group()
 
-player = Soldier('Green', 200, 200, 3, 5, 20, 5)
-enemy = Soldier('Red', 400, 200, 3, 5, 20, 0)
-enemy2 = Soldier('Red', 300, 200, 3, 5, 20, 0)
+
+
+# temp - create item boxes
+item_box = ItemBox('health', 100, 200)
+item_box_group.add(item_box)
+item_box = ItemBox('ammo', 400, 200)
+item_box_group.add(item_box)
+item_box = ItemBox('grenade', 500, 200)
+item_box_group.add(item_box)
+
+
+
+
+player = Soldier('Green', 200, 200, 1.75, 3, 20, 5)
+health_bar = Healthbar(10, 10, player.health, player.max_health)
+
+enemy = Soldier('Red', 400, 200, 1.75, 3, 20, 0)
+enemy2 = Soldier('Red', 300, 200, 1.75, 3, 20, 0)
 
 enemy_group.add(enemy)
 enemy_group.add(enemy2)
@@ -292,19 +413,32 @@ while run:
     clock.tick(FPS)
     draw_bg()
 
+    #show health
+    health_bar.draw(player.health)
+    #show ammo
+    draw_text('Ammo: ', font, WHITE, 10, 35)
+    for x in range(player.ammo):
+        screen.blit(bullet_img, (90 + (x * 20), 40))
+    draw_text('Grenade: ', font, WHITE, 10, 60)
+    for x in range(player.grenades):
+        screen.blit(grenade_img, (105 + (x * 20), 60))
+
     player.update()
     player.draw()
     for enemy in enemy_group:
         enemy.update()
         enemy.draw()
+        enemy.ai()
 
     # update and draw groups
     grenade_group.update()
     bullet_group.update()
     explosion_group.update()
+    item_box_group.update()
     grenade_group.draw(screen)
     bullet_group.draw(screen)
     explosion_group.draw(screen)
+    item_box_group.draw(screen)
 
 
 
